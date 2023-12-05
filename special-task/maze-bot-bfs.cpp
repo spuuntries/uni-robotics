@@ -1,4 +1,4 @@
-// BFS-based pathfinder.
+// Manually controlled
 
 #include <iostream>
 #include <vector>
