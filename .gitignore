@@ -1,3 +1,9 @@
 .vscode
 a.out
 build/
+*.zip
+*.hdf5
+ds/
+*.npy
+templist.txt
+*.pyc

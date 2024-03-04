@@ -1,0 +1,6 @@
+[submodule "internship/localization/ronin"]
+	path = internship/localization/ronin
+	url = https://github.com/sachini/ronin.git
+[submodule "internship/localization/niloc"]
+	path = internship/localization/niloc
+	url = https://github.com/spuuntries/niloc.git
