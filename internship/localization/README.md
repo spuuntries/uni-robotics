@@ -28,13 +28,13 @@ Anecdotal evidence says that, using purely the game rotational vector (game_rv: 
 
 This is due to a multitude of things, namely cumulative error, sensor bias, etc.
 
-And so, Niloc proposes their solution, which-- actually let's backtrack. While it _is_ true that using purely game*rv data would \_not* suffice; one can do an inertial navigation (which is a 2D velocity vector that shows the direction which you're going towards) data estimation from game*rv, which \_then* can be used to do inertial localization.
+And so, Niloc proposes their solution, which-- actually let's backtrack. While it _is_ true that using purely game_rv data would *not* suffice; one can do an inertial navigation (which is a 2D velocity vector that shows the direction which you're going towards) data estimation from game*rv, which \_then* can be used to do inertial localization.
 
-This is where RoNIN comes in. If you're one of my mentors then you might be thinking: "wait, RoNIN? I thought we're just learning about Niloc?" Well, as it turns out, no. Unless we have inertial measurements data to input into Niloc, we cannot compute the localization purely straight from the game_rv IMU.
+This is where RoNIN comes in. If you're one of my mentors then you might be thinking: "wait, RoNIN? I thought we're just learning about Niloc?" Well, as it turns out, no. Unless we have inertial navigation data to input into Niloc, we cannot compute the localization purely straight from the game_rv IMU.
 
 ## **RoNIN**
 
-RoNIN estimates the inertial navigation measurement given game*rv data. Prior to RoNIN, there \_were* methods that can estimate the inertial measurement data, however they require precisely tuned instruments to accurately measure the inertial navigation, _or,_ a very controlled environment.
+RoNIN estimates the inertial navigation measurement given game\_rv data. Prior to RoNIN, there *were* methods that can estimate the inertial navigation data, however they require precisely tuned instruments to accurately measure the inertial navigation, _or,_ a very controlled environment.
 
 Given a `200 × 6` tensor of 200 frame game_rv measurements, RoNIN produces a 2D velocity vector at the last frame.
 
