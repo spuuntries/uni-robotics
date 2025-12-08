@@ -63,8 +63,8 @@ for i in {1..3}; do
 done || true
 
 # 7. Spawn Cubes
-echo "Spawning Cubes..."
-ros2 run my_ball_tracker cube_spawner
+# echo "Spawning Cubes..."
+# ros2 run my_ball_tracker cube_spawner
 
 # 8. Run the collector node
 echo "Running cube_collector..."
