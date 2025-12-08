@@ -9,6 +9,7 @@ from nav_msgs.msg import Odometry
 from gazebo_msgs.msg import ModelStates
 from gazebo_msgs.srv import DeleteEntity, SpawnEntity
 from cv_bridge import CvBridge
+
 import cv2
 import numpy as np
 import math
@@ -19,7 +20,7 @@ import random
 class CubeCollectorNode(Node):
     def __init__(self):
         super().__init__("cube_collector_node")
-        self.get_logger().info("Cube Collector Node Started! (Spawn + Smart Search)")
+        self.get_logger().info("Cube Collector Node Started! (Anti-Stuck Logic)")
 
         # --- Parameters ---
         self.declare_parameter("target_color", "red")
@@ -82,13 +83,13 @@ class CubeCollectorNode(Node):
         # Create a timer for the main control loop (10Hz)
         self.timer = self.create_timer(0.1, self.control_loop)
 
-        # --- RESTORED: Spawn Initial Cubes Timer ---
+        # --- Spawn Initial Cubes Timer ---
         self.spawn_timer = self.create_timer(2.0, self.spawn_initial_cubes)
 
     def model_states_callback(self, msg):
         self.latest_model_states = msg
 
-    # --- RESTORED: Spawn Function ---
+    # --- Spawn Function ---
     def spawn_initial_cubes(self):
         self.spawn_timer.cancel() # Run once
         n = 5
@@ -304,10 +305,10 @@ class CubeCollectorNode(Node):
         time_since_seen = time.time() - self.last_sighting_time
 
         if self.state == "SEARCH":
-            # 1. Panic Stop
-            if dist_front < 0.20:
+            # 1. Panic Stop (Terlalu Dekat)
+            if dist_front < 0.25: # Jarak panik sedikit dinaikkan biar lebih aman
                 self.get_logger().warn(f"Panic Stop! Dist: {dist_front:.2f}m")
-                twist.linear.x = -0.15
+                twist.linear.x = -0.2 # Mundur lebih cepat dikit
                 twist.angular.z = 0.0
             
             # 2. Target Locked (Visual)
@@ -323,14 +324,28 @@ class CubeCollectorNode(Node):
                  twist.linear.x = -0.15
                  twist.angular.z = 0.0
                 
-            # 4. Obstacle Avoidance (No Visual)
-            elif dist_front < 0.60:
-                self.get_logger().warn(f"Obstacle ({dist_front:.2f}m). Avoiding.")
+            # 4. Obstacle Avoidance (Anti-Galau / Anti-Stuck Logic)
+            elif dist_front < 0.70: # Threshold mulai menghindar
+                # self.get_logger().warn(f"Obstacle ({dist_front:.2f}m). Avoiding.")
                 twist.linear.x = 0.0
-                if dist_left > dist_right:
-                    twist.angular.z = 0.6 
+                
+                # --- LOGIC BARU: Threshold untuk Histeresis ---
+                # Kalau beda kiri & kanan cuma sedikit (< 0.2m), robot bakal bingung.
+                # Jadi kita paksa: "Hanya belok kanan kalau kanan JAUH lebih lega".
+                # Kalau mirip-mirip, default ke KIRI saja biar muter terus.
+                
+                bias_threshold = 0.2 # Meter
+                
+                if dist_left > (dist_right + bias_threshold):
+                    # Kiri JELAS lebih luas -> Belok Kiri Cepat
+                    twist.angular.z = 1.0 
+                elif dist_right > (dist_left + bias_threshold):
+                    # Kanan JELAS lebih luas -> Belok Kanan Cepat
+                    twist.angular.z = -1.0
                 else:
-                    twist.angular.z = -0.6
+                    # Kiri & Kanan mirip (misal depan tembok rata) -> Paksa Kiri (Bias)
+                    # Ini kuncinya biar gak geleng-geleng
+                    twist.angular.z = 1.0 
             
             # 5. Memory Recovery (Scan last position)
             elif time_since_seen < 3.0:
@@ -339,9 +354,9 @@ class CubeCollectorNode(Node):
                 direction = 1.0 if self.last_known_error > 0 else -1.0
                 twist.angular.z = direction * 0.6 
 
-            # 6. Wander
+            # 6. Wander (Jalan-jalan)
             else:
-                twist.linear.x = 0.2
+                twist.linear.x = 0.25 # Speed up dikit
                 twist.angular.z = 0.1 
 
         elif self.state == "APPROACH":
