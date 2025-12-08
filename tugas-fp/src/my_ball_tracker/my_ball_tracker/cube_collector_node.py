@@ -23,7 +23,7 @@ class RobotState(Enum):
     GRAB = auto()
     RETURN = auto()
     DROP = auto()
-    EMERGENCY_AVOID = auto()  # New state for emergency avoidance
+    EMERGENCY_AVOID = auto()
 
 
 class LidarZones:
@@ -37,7 +37,7 @@ class LidarZones:
         self.back = float('inf')
         self.front_narrow = float('inf')
         
-        # Blind spot indicators (True = potential blind spot detected)
+        # Blind spot indicators
         self.front_blind = False
         self.front_left_blind = False
         self.front_right_blind = False
@@ -61,28 +61,23 @@ class VelocityMonitor:
     def check_collision(self) -> bool:
         """
         Detect collision by comparing commanded velocity with actual movement.
-        If we're commanding forward motion but not moving, we might be stuck.
         """
         if len(self.cmd_history) < 10 or len(self.pos_history) < 10:
             return False
             
-        # Get recent command history
         recent_cmds = list(self.cmd_history)[-10:]
         recent_pos = list(self.pos_history)[-10:]
         
-        # Calculate average commanded linear velocity
         avg_cmd_linear = sum(c[0] for c in recent_cmds) / len(recent_cmds)
         
-        # Calculate actual displacement
         if len(recent_pos) >= 2:
             dx = recent_pos[-1][0] - recent_pos[0][0]
             dy = recent_pos[-1][1] - recent_pos[0][1]
             dt = recent_pos[-1][2] - recent_pos[0][2]
             
-            if dt > 0.1:  # At least 100ms of data
+            if dt > 0.1:
                 actual_speed = math.sqrt(dx**2 + dy**2) / dt
                 
-                # If commanding significant forward velocity but barely moving
                 if avg_cmd_linear > 0.1 and actual_speed < 0.03:
                     self.collision_suspected = True
                     return True
@@ -102,22 +97,22 @@ class CubeCollectorNode(Node):
         
         # ============ OBSTACLE AVOIDANCE PARAMETERS ============
         # Lidar characteristics (TurtleBot3 LDS-01)
-        self.LIDAR_MIN_RANGE = 0.12        # Minimum reliable range
-        self.LIDAR_MAX_RANGE = 3.5         # Maximum reliable range
+        self.LIDAR_MIN_RANGE = 0.12
+        self.LIDAR_MAX_RANGE = 3.5
         
-        # Safety distances - LEBIH BESAR untuk pilar
-        self.PILLAR_SAFE_DISTANCE = 0.55   # Jarak aman dari pilar (lebih jauh)
-        self.PILLAR_CRITICAL_DISTANCE = 0.40  # Jarak kritis dari pilar
-        self.CUBE_APPROACH_DISTANCE = 0.35  # Boleh lebih dekat ke cube
+        # Safety distances
+        self.PILLAR_SAFE_DISTANCE = 0.55
+        self.PILLAR_CRITICAL_DISTANCE = 0.40
+        self.CUBE_APPROACH_DISTANCE = 0.35
         
         # General safety
         self.SAFE_DISTANCE = 0.50
         self.CRITICAL_DISTANCE = 0.35
-        self.EMERGENCY_DISTANCE = 0.25     # Sangat bahaya - immediate reverse
+        self.EMERGENCY_DISTANCE = 0.25
         
         # Blind spot detection thresholds
-        self.BLIND_SPOT_INVALID_RATIO = 0.4  # If >40% readings invalid, suspect blind spot
-        self.MIN_VALID_READINGS = 3          # Minimum valid readings needed
+        self.BLIND_SPOT_INVALID_RATIO = 0.4
+        self.MIN_VALID_READINGS = 3
         
         # Speed parameters
         self.MAX_LINEAR_SPEED = 0.20
@@ -183,7 +178,7 @@ class CubeCollectorNode(Node):
         self.angular_error = None
         self.target_area = 0
         self.target_in_view = False
-        self.target_bbox = None  # Bounding box of detected cube
+        self.target_bbox = None
         self.last_img_time = time.time()
         
         # Search optimization
@@ -199,7 +194,7 @@ class CubeCollectorNode(Node):
         self.emergency_direction = 1
         self.consecutive_emergency_count = 0
         
-        # Last commanded velocity (untuk monitoring)
+        # Last commanded velocity
         self.last_cmd_vel = Twist()
 
         # Create control timer (10Hz)
@@ -223,7 +218,6 @@ class CubeCollectorNode(Node):
 
         self.current_pose = (pos.x, pos.y, yaw)
         
-        # Update monitors
         current_time = time.time()
         self.position_history.append((pos.x, pos.y, current_time))
         self.velocity_monitor.update(self.last_cmd_vel, (pos.x, pos.y), current_time)
@@ -238,8 +232,6 @@ class CubeCollectorNode(Node):
     def _process_lidar_zones_with_blind_detection(self):
         """
         Process lidar data dengan deteksi blind spot.
-        Jika banyak reading yang invalid (inf, nan, atau < min_range),
-        kemungkinan ada obstacle sangat dekat (blind spot).
         """
         if len(self.raw_scan_ranges) == 0:
             return
@@ -252,14 +244,12 @@ class CubeCollectorNode(Node):
             """
             deg_to_idx = n / 360.0
             
-            # Convert degrees to indices (handle wraparound)
             start_idx = int(start_deg * deg_to_idx) % n
             end_idx = int(end_deg * deg_to_idx) % n
             
-            # Get indices in range
             if start_idx <= end_idx:
-                indices = range(start_idx, end_idx)
-            else:  # Wraparound
+                indices = list(range(start_idx, end_idx))
+            else:
                 indices = list(range(start_idx, n)) + list(range(0, end_idx))
             
             valid_readings = []
@@ -269,11 +259,9 @@ class CubeCollectorNode(Node):
             for i in indices:
                 r = self.raw_scan_ranges[i]
                 
-                # Check for invalid readings
                 if math.isinf(r) or math.isnan(r):
                     invalid_count += 1
                 elif r < self.LIDAR_MIN_RANGE:
-                    # Reading below minimum range - something VERY close
                     too_close_count += 1
                     invalid_count += 1
                 elif r < self.LIDAR_MAX_RANGE:
@@ -281,18 +269,13 @@ class CubeCollectorNode(Node):
                 else:
                     invalid_count += 1
             
-            total_readings = len(list(indices))
+            total_readings = len(indices)
             valid_count = len(valid_readings)
             
-            # Detect blind spot condition
             blind_spot = False
             if total_readings > 0:
                 invalid_ratio = invalid_count / total_readings
                 
-                # Blind spot suspected if:
-                # 1. High ratio of invalid readings
-                # 2. Too many "too close" readings
-                # 3. Very few valid readings
                 if (invalid_ratio > self.BLIND_SPOT_INVALID_RATIO or 
                     too_close_count > 2 or
                     (valid_count < self.MIN_VALID_READINGS and total_readings > 5)):
@@ -303,29 +286,17 @@ class CubeCollectorNode(Node):
             return min_dist, blind_spot, invalid_count, valid_count
         
         # Analyze each zone
-        # Front narrow: -15 to +15 degrees (350 to 10)
         min_d, blind, inv, val = analyze_zone(345, 15)
         self.lidar_zones.front_narrow = min_d
         self.lidar_zones.front_blind = blind
         self.lidar_zones.front_invalid_count = inv
         self.lidar_zones.front_valid_count = val
         
-        # Front wide: -30 to +30 degrees (330 to 30)
         self.lidar_zones.front, _, _, _ = analyze_zone(330, 30)
-        
-        # Front-left: 30 to 60 degrees
         self.lidar_zones.front_left, self.lidar_zones.front_left_blind, _, _ = analyze_zone(30, 60)
-        
-        # Front-right: 300 to 330 degrees
         self.lidar_zones.front_right, self.lidar_zones.front_right_blind, _, _ = analyze_zone(300, 330)
-        
-        # Left: 60 to 120 degrees
         self.lidar_zones.left, _, _, _ = analyze_zone(60, 120)
-        
-        # Right: 240 to 300 degrees
         self.lidar_zones.right, _, _, _ = analyze_zone(240, 300)
-        
-        # Back: 150 to 210 degrees
         self.lidar_zones.back, _, _, _ = analyze_zone(150, 210)
 
     def image_callback(self, msg):
@@ -375,7 +346,6 @@ class CubeCollectorNode(Node):
                     cx = int(M["m10"] / M["m00"])
                     cy = int(M["m01"] / M["m00"])
 
-                    # Get bounding box
                     x, y, bw, bh = cv2.boundingRect(largest_contour)
                     self.target_bbox = (x, y, bw, bh)
 
@@ -387,7 +357,6 @@ class CubeCollectorNode(Node):
                     self.target_in_view = True
                     self.last_cube_direction = 1 if self.angular_error > 0 else -1
 
-        # Draw debug info
         self._draw_debug_info(cv_image)
 
         if self.debug_img_pub.get_subscription_count() > 0:
@@ -397,26 +366,21 @@ class CubeCollectorNode(Node):
         """Draw debugging information on image"""
         h, w, _ = cv_image.shape
         
-        # State info
         cv2.putText(cv_image, f"State: {self.state.name}", (10, 30),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
         
-        # Lidar info
         front_color = (0, 0, 255) if self.lidar_zones.front_blind else (255, 255, 0)
         cv2.putText(cv_image, f"Front: {self.lidar_zones.front_narrow:.2f}m", (10, 60),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.5, front_color, 1)
         
-        # Blind spot warning
         if self.lidar_zones.front_blind:
             cv2.putText(cv_image, "!! BLIND SPOT !!", (w//2 - 80, 30),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2)
         
-        # Collision warning
         if self.velocity_monitor.collision_suspected:
             cv2.putText(cv_image, "!! COLLISION !!", (w//2 - 80, 60),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2)
         
-        # Target info
         if self.target_in_view:
             cv2.putText(cv_image, f"Target Area: {self.target_area}", (10, 90),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
@@ -426,11 +390,6 @@ class CubeCollectorNode(Node):
     def is_obstacle_pillar(self) -> bool:
         """
         Determine if the obstacle in front is a PILLAR (not a cube).
-        
-        Logic:
-        - If we see red cube in camera AND it's centered, obstacle = cube
-        - If we see obstacle but NO red cube, obstacle = pillar
-        - If blind spot detected but no red cube, assume pillar
         """
         has_obstacle = (
             self.lidar_zones.front_narrow < self.PILLAR_SAFE_DISTANCE or
@@ -441,37 +400,25 @@ class CubeCollectorNode(Node):
         if not has_obstacle:
             return False
             
-        # If we see a red cube centered in view, it's probably the cube
-        if self.target_in_view and abs(self.angular_error) < 100:
-            # Additional check: is the cube taking up significant space?
-            # Large area + centered = definitely cube
-            if self.target_area > 500:
-                return False  # It's a cube, not pillar
+        if self.target_in_view and self.angular_error is not None:
+            if abs(self.angular_error) < 100 and self.target_area > 500:
+                return False
         
-        # No cube visible or cube not centered = pillar
         return True
     
     def detect_imminent_collision(self) -> bool:
         """
         Detect if collision is imminent or already happening.
-        Uses multiple signals:
-        1. Lidar blind spot
-        2. Velocity mismatch (commanding forward but not moving)
-        3. Very close readings
         """
-        # Blind spot in front - something very close
         if self.lidar_zones.front_blind:
             return True
             
-        # Velocity-based collision detection
         if self.velocity_monitor.check_collision():
             return True
             
-        # Emergency distance breach
         if self.lidar_zones.front_narrow < self.EMERGENCY_DISTANCE:
             return True
             
-        # Multiple blind spots
         blind_count = sum([
             self.lidar_zones.front_blind,
             self.lidar_zones.front_left_blind,
@@ -486,38 +433,31 @@ class CubeCollectorNode(Node):
         """
         Check proximity to pillar (not cube).
         Returns: (is_near_pillar, danger_level, suggested_direction)
-        
-        danger_level: 0=safe, 1=caution, 2=danger, 3=critical
         """
         if not self.is_obstacle_pillar():
             return False, 0, 0
             
-        # Get minimum front distance
         front_dist = self.lidar_zones.front_narrow
         
-        # If blind spot, assume very close
         if self.lidar_zones.front_blind:
             front_dist = self.EMERGENCY_DISTANCE
             
-        # Determine danger level
         if front_dist < self.EMERGENCY_DISTANCE:
-            danger_level = 3  # Critical
+            danger_level = 3
         elif front_dist < self.PILLAR_CRITICAL_DISTANCE:
-            danger_level = 2  # Danger
+            danger_level = 2
         elif front_dist < self.PILLAR_SAFE_DISTANCE:
-            danger_level = 1  # Caution
+            danger_level = 1
         else:
-            danger_level = 0  # Safe
+            danger_level = 0
             
-        # Suggest avoidance direction
         left_space = min(self.lidar_zones.front_left, self.lidar_zones.left)
         right_space = min(self.lidar_zones.front_right, self.lidar_zones.right)
         
-        # Prefer direction with more space
         if left_space > right_space + 0.1:
-            direction = 1  # Turn left
+            direction = 1
         elif right_space > left_space + 0.1:
-            direction = -1  # Turn right
+            direction = -1
         else:
             direction = self.search_direction
             
@@ -528,20 +468,17 @@ class CubeCollectorNode(Node):
     def handle_emergency_avoidance(self) -> Twist:
         """
         Emergency collision avoidance behavior.
-        Called when collision is imminent or happening.
         """
         twist = Twist()
         
         current_time = time.time()
         
-        # Initialize emergency if just started
         if self.state != RobotState.EMERGENCY_AVOID:
             self.previous_state = self.state
             self.state = RobotState.EMERGENCY_AVOID
             self.emergency_start_time = current_time
             self.consecutive_emergency_count += 1
             
-            # Determine escape direction
             left_clear = not self.lidar_zones.front_left_blind and self.lidar_zones.front_left > 0.3
             right_clear = not self.lidar_zones.front_right_blind and self.lidar_zones.front_right > 0.3
             
@@ -558,33 +495,30 @@ class CubeCollectorNode(Node):
         
         elapsed = current_time - self.emergency_start_time
         
-        # Phase 1: Back up (0-1.5s)
         if elapsed < 1.5:
             twist.linear.x = self.EMERGENCY_REVERSE_SPEED
             twist.angular.z = self.emergency_direction * 0.5
             
-        # Phase 2: Rotate away (1.5-3s)
         elif elapsed < 3.0:
             twist.linear.x = 0.0
             twist.angular.z = self.emergency_direction * self.MAX_ANGULAR_SPEED
             
-        # Phase 3: Check if clear and exit
         else:
             if self.is_path_clear_for_exit():
                 self.get_logger().info("Emergency avoidance complete. Resuming.")
-                self.state = self.previous_state if self.previous_state else RobotState.SEARCH
+                if self.previous_state is not None:
+                    self.state = self.previous_state
+                else:
+                    self.state = RobotState.SEARCH
                 self.search_start_time = time.time()
                 
-                # If too many consecutive emergencies, reset search
                 if self.consecutive_emergency_count > 3:
                     self.get_logger().warn("Too many emergencies. Full reset.")
                     self.state = RobotState.SEARCH
                     self.consecutive_emergency_count = 0
             else:
-                # Continue rotating
                 twist.angular.z = self.emergency_direction * self.MAX_ANGULAR_SPEED
                 
-                # If stuck in emergency for too long, try opposite direction
                 if elapsed > 5.0:
                     self.emergency_direction *= -1
                     self.emergency_start_time = current_time
@@ -607,32 +541,26 @@ class CubeCollectorNode(Node):
         """Search behavior with pillar avoidance"""
         twist = Twist()
         
-        # Check for pillar proximity
         near_pillar, danger_level, avoid_dir = self.check_pillar_proximity()
         
-        if danger_level >= 2:  # Danger or critical
-            # Strong avoidance
+        if danger_level >= 2:
             twist.linear.x = 0.0 if danger_level == 3 else 0.05
             twist.angular.z = avoid_dir * self.MAX_ANGULAR_SPEED
             return twist
             
-        if danger_level == 1:  # Caution
-            # Gentle avoidance while continuing search
+        if danger_level == 1:
             twist.linear.x = self.SEARCH_LINEAR_SPEED * 0.5
             twist.angular.z = avoid_dir * 0.8
             return twist
         
-        # Check stuck condition
         if self.is_stuck():
             return self.handle_stuck()
         else:
             self.stuck_counter = 0
-            self.consecutive_emergency_count = 0  # Reset if moving well
+            self.consecutive_emergency_count = 0
         
-        # Normal search behavior
         search_time = time.time() - self.search_start_time
         
-        # Adaptive search
         if search_time < 3.0:
             if self.last_cube_direction != 0:
                 twist.angular.z = self.last_cube_direction * 0.4
@@ -654,7 +582,6 @@ class CubeCollectorNode(Node):
             if int(search_time) % 12 == 0 and int(search_time) > 0:
                 self.search_direction *= -1
         
-        # Proactive wall/pillar avoidance
         twist = self.apply_reactive_avoidance(twist)
         
         return twist
@@ -662,29 +589,25 @@ class CubeCollectorNode(Node):
     def apply_reactive_avoidance(self, twist: Twist) -> Twist:
         """Apply reactive obstacle avoidance to any twist command"""
         
-        # Skip if in emergency
         if self.state == RobotState.EMERGENCY_AVOID:
             return twist
             
-        # Front obstacle
         if self.lidar_zones.front < self.SAFE_DISTANCE:
             scale = (self.lidar_zones.front - self.CRITICAL_DISTANCE) / (self.SAFE_DISTANCE - self.CRITICAL_DISTANCE)
             scale = max(0.0, min(1.0, scale))
             twist.linear.x *= scale
             
-            # Add rotation away
             _, _, avoid_dir = self.check_pillar_proximity()
             twist.angular.z += avoid_dir * (1.0 - scale) * 0.8
         
-        # Side obstacles
         if self.lidar_zones.front_left < self.SAFE_DISTANCE:
             twist.angular.z -= 0.3
         if self.lidar_zones.front_right < self.SAFE_DISTANCE:
             twist.angular.z += 0.3
             
-        # Clamp values
+        # FIX: Changed twist.angular_z to twist.angular.z
         twist.linear.x = max(0.0, min(twist.linear.x, self.MAX_LINEAR_SPEED))
-        twist.angular.z = max(-self.MAX_ANGULAR_SPEED, min(twist.angular_z, self.MAX_ANGULAR_SPEED))
+        twist.angular.z = max(-self.MAX_ANGULAR_SPEED, min(twist.angular.z, self.MAX_ANGULAR_SPEED))
         
         return twist
 
@@ -733,11 +656,9 @@ class CubeCollectorNode(Node):
             self.search_start_time = time.time()
             return twist
         
-        # Check if obstacle is pillar (not the cube)
         near_pillar, danger_level, avoid_dir = self.check_pillar_proximity()
         
         if near_pillar and danger_level >= 2:
-            # Obstacle is pillar, not cube - avoid it
             self.get_logger().info("Pillar detected during approach - avoiding")
             twist.linear.x = 0.0
             twist.angular.z = avoid_dir * 0.8
@@ -746,16 +667,14 @@ class CubeCollectorNode(Node):
         # Visual servoing
         kp_angular = 0.003
         twist.angular.z = kp_angular * self.angular_error
-        twist.angular_z = np.clip(twist.angular.z, -0.6, 0.6)
+        # FIX: Changed twist.angular_z to twist.angular.z
+        twist.angular.z = float(np.clip(twist.angular.z, -0.6, 0.6))
         
-        # Forward speed based on alignment
         alignment_factor = 1.0 - min(abs(self.angular_error) / 200.0, 0.5)
         twist.linear.x = self.APPROACH_LINEAR_SPEED * alignment_factor
         
-        # Check distance to target
         front_dist = self.lidar_zones.front_narrow
         
-        # If close to something and it's the cube (centered, red visible)
         is_cube_centered = abs(self.angular_error) < 60
         
         if front_dist < 0.38 and is_cube_centered and self.target_area > 300:
@@ -764,7 +683,6 @@ class CubeCollectorNode(Node):
             twist.linear.x = 0.0
             twist.angular.z = 0.0
         
-        # Apply gentle avoidance for side obstacles
         if self.lidar_zones.front_left < self.CUBE_APPROACH_DISTANCE:
             twist.angular.z -= 0.2
         if self.lidar_zones.front_right < self.CUBE_APPROACH_DISTANCE:
@@ -791,21 +709,16 @@ class CubeCollectorNode(Node):
             self.state = RobotState.DROP
             return twist
         
-        # Check for pillar
         near_pillar, danger_level, avoid_dir = self.check_pillar_proximity()
         
         if danger_level >= 2:
-            # Pillar in way - avoid first
             twist.linear.x = 0.0 if danger_level == 3 else 0.05
             twist.angular.z = avoid_dir * self.MAX_ANGULAR_SPEED * 0.8
             return twist
         
-        # Navigation towards home with obstacle avoidance
-        # Attractive force
         attract_angular = 1.0 * angle_diff
         attract_linear = min(self.RETURN_LINEAR_SPEED, dist_to_home * 0.4)
         
-        # Repulsive force from obstacles
         repulse_angular = 0.0
         
         if self.lidar_zones.front < self.SAFE_DISTANCE:
@@ -819,7 +732,7 @@ class CubeCollectorNode(Node):
             repulse_angular += 0.5
         
         twist.angular.z = attract_angular + repulse_angular
-        twist.angular.z = np.clip(twist.angular.z, -self.MAX_ANGULAR_SPEED, self.MAX_ANGULAR_SPEED)
+        twist.angular.z = float(np.clip(twist.angular.z, -self.MAX_ANGULAR_SPEED, self.MAX_ANGULAR_SPEED))
         
         if abs(angle_diff) < 0.7:
             twist.linear.x = max(0.0, min(attract_linear, self.MAX_LINEAR_SPEED))
@@ -845,10 +758,8 @@ class CubeCollectorNode(Node):
         twist = Twist()
         
         # === PRIORITY 1: Emergency collision detection ===
-        # Check for imminent collision (except when grabbing cube)
         if self.state not in [RobotState.GRAB, RobotState.DROP]:
             if self.detect_imminent_collision():
-                # Check if it's a pillar (not cube)
                 if self.is_obstacle_pillar():
                     twist = self.handle_emergency_avoidance()
                     self.cmd_vel_pub.publish(twist)
