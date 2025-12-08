@@ -1,6 +1,8 @@
-# ROS2 Assignment 1
+# ROS2 Final Project Assignment
 
 Team 2
+
+![flowchart](./acc_flow.png)
 
 |        Team Member        | Student ID |
 | :-----------------------: | :--------: |
