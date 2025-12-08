@@ -3,6 +3,7 @@
 Team 2
 
 ![flowchart](./acc_flow.png)
+<small>note: lidar dist thresh was changed to 0.5 based on empirical testing.</small>
 
 |        Team Member        | Student ID |
 | :-----------------------: | :--------: |
