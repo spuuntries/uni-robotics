@@ -191,7 +191,7 @@ class CubeCollectorNode(Node):
 
         # Threshold for "touching" (0.6m covers the robot radius + cube radius)
         # Using GT vs GT, this should be very accurate.
-        if min_dist < 1.0:
+        if min_dist < 0.5:
             return best_name
         return None
 
@@ -288,36 +288,51 @@ class CubeCollectorNode(Node):
         req.initial_pose.position.z = 0.1
         self.spawn_client.call_async(req)
 
-    def get_lidar_front(self):
-        # Return minimum distance in the front 20-degree cone
-        if len(self.scan_ranges) == 0:
-            return 99.9
+    def get_obstacle_avoidance(self, dist_limit=0.6):
+        # Returns (angular_correction, min_front_dist)
+        if not self.scan_ranges:
+            return 0.0, 99.9
 
-        # Usually scan is 360 points (0 to 359)
-        # 0 is Front, but sometimes ranges are 0..360 where 0 is front
-        # Let's assume standard Turtlebot3 scan: 0 is front.
-        # Front cone: [0..10] and [-10..end]
         n = len(self.scan_ranges)
-        width = 10
 
-        front_ranges = self.scan_ranges[0:width] + self.scan_ranges[-width:]
+        # Helper to get min distance in a degree range
+        def get_min_in_range(start_deg, end_deg):
+            vals = []
+            for deg in range(start_deg, end_deg + 1):
+                idx = deg % 360
+                if idx < n:
+                    r = self.scan_ranges[idx]
+                    if not math.isinf(r) and not math.isnan(r) and r > 0.05:
+                        vals.append(r)
+            return min(vals) if vals else 99.9
 
-        valid = [
-            r
-            for r in front_ranges
-            if not math.isinf(r) and not math.isnan(r) and r > 0.01
-        ]
-        if not valid:
-            return 99.9
+        front = get_min_in_range(-20, 20)
+        left = get_min_in_range(20, 60)
+        right = get_min_in_range(300, 340)  # -60 to -20
 
-        return min(valid)
+        turn = 0.0
+
+        # If obstacle is detected within limit
+        if front < dist_limit:
+            # Blocked in front, turn away from closest side
+            if left < right:
+                turn = -0.8  # Turn Right strongly
+            else:
+                turn = 0.8  # Turn Left strongly
+        elif left < dist_limit * 0.7:
+            turn = -0.4  # Nudge Right
+        elif right < dist_limit * 0.7:
+            turn = 0.4  # Nudge Left
+
+        return turn, front
 
     def control_loop(self):
         if self.current_pose is None:
             return  # Wait for odom
 
         twist = Twist()
-        min_front = self.get_lidar_front()
+        # Default avoidance check
+        avoid_turn, front_dist = self.get_obstacle_avoidance(dist_limit=0.6)
 
         if self.state == "SEARCH":
             if self.angular_error is not None:
@@ -325,9 +340,9 @@ class CubeCollectorNode(Node):
                 self.state = "APPROACH"
             else:
                 # Wander
-                if min_front < 0.6:
+                if abs(avoid_turn) > 0.1:
                     # Obstacle! Turn
-                    twist.angular.z = 0.5
+                    twist.angular.z = avoid_turn
                     twist.linear.x = 0.0
                 else:
                     twist.linear.x = 0.2
@@ -338,19 +353,30 @@ class CubeCollectorNode(Node):
                 self.state = "SEARCH"  # Lost visual
                 twist.linear.x = 0.0
             else:
+                # Obstacle Avoidance blending
+                # Use slightly tighter limit for approach to allow getting close to objects
+                avoid_turn, front_dist = self.get_obstacle_avoidance(dist_limit=0.5)
+
                 # Visual Servoing
                 # P-Controller for rotation
                 k_p = 0.005
-                twist.angular.z = k_p * self.angular_error
+                vis_turn = k_p * self.angular_error
 
-                # Forward speed
-                twist.linear.x = 0.15
+                # Combine: Priority to avoidance if critical
+                if abs(avoid_turn) > 0.1:
+                    twist.angular.z = avoid_turn + (
+                        vis_turn * 0.5
+                    )  # Dampen visual tracking if avoiding
+                    twist.linear.x = 0.05  # Slow down
+                else:
+                    twist.angular.z = vis_turn
+                    twist.linear.x = 0.15
 
                 # Check if we are close enough to grab
                 # Condition: We see red (angular_error is not None) AND Lidar says close
-                if min_front < 0.40:
+                if front_dist < 0.40:
                     self.get_logger().info(
-                        f"Close enough! (Lidar: {min_front:.2f}m). GRABBING."
+                        f"Close enough! (Lidar: {front_dist:.2f}m). GRABBING."
                     )
                     self.state = "GRAB"
                     twist.linear.x = 0.0
@@ -386,14 +412,31 @@ class CubeCollectorNode(Node):
             while angle_diff < -math.pi:
                 angle_diff += 2 * math.pi
 
+            # Wiggle room logic:
+            # If close to home, reduce avoidance sensitivity
+            avoid_limit = 0.6
+            if dist_to_home < 1.0:
+                avoid_limit = (
+                    0.35  # Allow getting closer to pillars near tracking goal/home
+                )
+
+            avoid_turn, front_dist = self.get_obstacle_avoidance(dist_limit=avoid_limit)
+
             if dist_to_home < 0.3:
                 self.state = "DROP"
                 twist.linear.x = 0.0
                 twist.angular.z = 0.0
             else:
-                twist.angular.z = 1.5 * angle_diff
-                if abs(angle_diff) < 0.5:
-                    twist.linear.x = 0.2
+                nav_turn = 1.5 * angle_diff
+
+                if abs(avoid_turn) > 0.1:
+                    # Blend obstacle avoidance with homing
+                    twist.angular.z = avoid_turn + (nav_turn * 0.3)
+                    twist.linear.x = 0.05
+                else:
+                    twist.angular.z = nav_turn
+                    if abs(angle_diff) < 0.5:
+                        twist.linear.x = 0.2
 
         elif self.state == "DROP":
             self.get_logger().info("Dropping Cube")
