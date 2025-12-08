@@ -18,11 +18,11 @@ import time
 class CubeCollectorNode(Node):
     def __init__(self):
         super().__init__("cube_collector_node")
-        self.get_logger().info("Cube Collector Node Started! (Lidar + Vision Only)")
+        self.get_logger().info("Cube Collector Node Started! (Memory + Smart Search)")
 
         # --- Parameters ---
         self.declare_parameter("target_color", "red")
-        self.declare_parameter("pickup_distance", 0.45)  # Distance to trigger grab
+        self.declare_parameter("pickup_distance", 0.45) 
 
         # --- Subscribers ---
         self.image_sub = self.create_subscription(
@@ -64,100 +64,27 @@ class CubeCollectorNode(Node):
 
         # --- State Variables ---
         self.bridge = CvBridge()
-        self.state = "SEARCH"  # SEARCH, APPROACH, RETURN, DROP
-        self.current_pose = None  # (x, y, theta)
+        self.state = "SEARCH"
+        self.current_pose = None
         self.has_cube = False
         self.cubes_collected = 0
         self.home_pose = (0.0, 0.0)
 
-        # Real-time state (for "Virtual Gripper" logic only)
         self.latest_model_states = None
-
-        # Sensor Data
         self.scan_ranges = []
 
-        # Control vars
-        self.last_img_time = time.time()
+        # --- Tracking & Memory Variables ---
         self.angular_error = 0.0  # None if target not seen
+        self.last_sighting_time = 0.0 # Waktu terakhir lihat target
+        self.last_known_error = 0.0   # Posisi terakhir target (untuk recovery)
 
         # Create a timer for the main control loop (10Hz)
         self.timer = self.create_timer(0.1, self.control_loop)
 
-        # Spawn Cubes asynchronously after startup (prevents blocking __init__)
-        self.spawn_timer = self.create_timer(2.0, self.spawn_initial_cubes)
-
     def model_states_callback(self, msg):
         self.latest_model_states = msg
 
-    def spawn_initial_cubes(self):
-        # Cancel the timer so this only runs once
-        self.spawn_timer.cancel()
-        n = 5
-
-        import random
-
-        # Wait for service (with timeout so we don't hang forever)
-        if not self.spawn_client.wait_for_service(timeout_sec=5.0):
-            self.get_logger().error(
-                "Spawn service not available after waiting. Skipping spawn."
-            )
-            return
-
-        sdf = """
-        <?xml version='1.0'?>
-        <sdf version="1.4">
-            <model name="my_cube">
-                <static>0</static>
-                <link name="link">
-                    <inertial>
-                        <mass>0.1</mass>
-                        <inertia>
-                            <ixx>0.0001</ixx><ixy>0</ixy><ixz>0</ixz>
-                            <iyy>0.0001</iyy><iyz>0</iyz><izz>0.0001</izz>
-                        </inertia>
-                    </inertial>
-                    <collision name="collision">
-                        <geometry><box><size>0.2 0.2 0.2</size></box></geometry>
-                    </collision>
-                    <visual name="visual">
-                        <geometry><box><size>0.2 0.2 0.2</size></box></geometry>
-                        <material>
-                            <script>
-                                <uri>file://media/materials/scripts/gazebo.material</uri>
-                                <name>Gazebo/Red</name>
-                            </script>
-                        </material>
-                    </visual>
-                </link>
-            </model>
-        </sdf>
-        """
-
-        for i in range(5):
-            req = SpawnEntity.Request()
-            name = f"cube_{i}"
-            req.name = name
-            req.xml = sdf
-
-            # Spawn in a donut shape
-            while True:
-                rx = random.uniform(-1.5, 1.5)
-                ry = random.uniform(-1.5, 1.5)
-                if (rx**2 + ry**2) > 0.5**2:
-                    break
-
-            req.initial_pose.position.x = rx
-            req.initial_pose.position.y = ry
-            req.initial_pose.position.z = 0.5
-
-            # Fire and forget - we do NOT store the location
-            self.spawn_client.call_async(req)
-
-        self.get_logger().info(f"Spawned {n} cubes blindly.")
-
     def get_closest_cube_name(self):
-        # "Virtual Gripper" logic
-        # Returns the name of a cube ONLY if it is physically close to the robot
         if not self.latest_model_states:
             return None
 
@@ -167,7 +94,7 @@ class CubeCollectorNode(Node):
         poses = self.latest_model_states.pose
 
         for i, name in enumerate(names):
-            if name == "waffle_pi":  # Default Turtlebot3 name in Gazebo
+            if name == "waffle_pi": 
                 robot_pose = (poses[i].position.x, poses[i].position.y)
                 break
 
@@ -189,8 +116,6 @@ class CubeCollectorNode(Node):
                     min_dist = dist
                     best_name = name
 
-        # Threshold for "touching" (0.6m covers the robot radius + cube radius)
-        # Using GT vs GT, this should be very accurate.
         if min_dist < 1.0:
             return best_name
         return None
@@ -199,26 +124,20 @@ class CubeCollectorNode(Node):
         self.scan_ranges = msg.ranges
 
     def odom_callback(self, msg):
-        # Extract x, y, theta
         pos = msg.pose.pose.position
         orient = msg.pose.pose.orientation
-
-        # quaternion to euler (yaw)
         siny_cosp = 2 * (orient.w * orient.z + orient.x * orient.y)
         cosy_cosp = 1 - 2 * (orient.y * orient.y + orient.z * orient.z)
         yaw = math.atan2(siny_cosp, cosy_cosp)
-
         self.current_pose = (pos.x, pos.y, yaw)
 
     def image_callback(self, msg):
         try:
             cv_image = self.bridge.imgmsg_to_cv2(msg, "bgr8")
-            self.last_img_time = time.time()
         except Exception as e:
             self.get_logger().error(f"cv_bridge error: {e}")
             return
 
-        # Detect Red Cubes
         hsv_image = cv2.cvtColor(cv_image, cv2.COLOR_BGR2HSV)
 
         # Red ranges
@@ -248,10 +167,15 @@ class CubeCollectorNode(Node):
                     cy = int(M["m01"] / M["m00"])
 
                     cv2.circle(cv_image, (cx, cy), 10, (0, 255, 0), 2)
-
                     h, w, d = cv_image.shape
-                    # Error: Center of image vs Center of blob
+                    
+                    # Error: Positif = Target di KIRI, Negatif = Target di KANAN
                     self.angular_error = (w / 2) - cx
+                    
+                    # --- MEMORY UPDATE ---
+                    # Kita simpan info ini biar kalau hilang, kita tahu harus nyari kemana
+                    self.last_known_error = self.angular_error
+                    self.last_sighting_time = time.time()
             else:
                 self.angular_error = None
         else:
@@ -288,128 +212,158 @@ class CubeCollectorNode(Node):
         req.initial_pose.position.z = 0.1
         self.spawn_client.call_async(req)
 
-    def get_lidar_front(self):
-        # Return minimum distance in the front 20-degree cone
+    def get_lidar_sector(self, sector="front"):
         if len(self.scan_ranges) == 0:
             return 99.9
 
-        # Usually scan is 360 points (0 to 359)
-        # 0 is Front, but sometimes ranges are 0..360 where 0 is front
-        # Let's assume standard Turtlebot3 scan: 0 is front.
-        # Front cone: [0..10] and [-10..end]
-        n = len(self.scan_ranges)
-        width = 10
-
-        front_ranges = self.scan_ranges[0:width] + self.scan_ranges[-width:]
-
-        valid = [
-            r
-            for r in front_ranges
-            if not math.isinf(r) and not math.isnan(r) and r > 0.01
-        ]
-        if not valid:
+        ranges = self.scan_ranges
+        if sector == "front":
+            sector_ranges = ranges[0:20] + ranges[-20:]
+        elif sector == "left":
+            sector_ranges = ranges[60:120]
+        elif sector == "right":
+            sector_ranges = ranges[240:300]
+        else:
             return 99.9
 
-        return min(valid)
+        valid_ranges = [r for r in sector_ranges if not math.isinf(r) and not math.isnan(r) and r > 0.05]
+        if not valid_ranges:
+            return 99.9 
+        return min(valid_ranges)
 
     def control_loop(self):
         if self.current_pose is None:
-            return  # Wait for odom
+            return 
 
         twist = Twist()
-        min_front = self.get_lidar_front()
+        
+        dist_front = self.get_lidar_sector("front")
+        dist_left = self.get_lidar_sector("left")
+        dist_right = self.get_lidar_sector("right")
+
+        # Flag untuk logika
+        target_visible = self.angular_error is not None
+        time_since_seen = time.time() - self.last_sighting_time
 
         if self.state == "SEARCH":
-            if self.angular_error is not None:
-                self.get_logger().info("Target Sight! Switching to APPROACH")
+            # --- PRIORITAS 1: SAFETY KRITIS (JANGAN NABRAK) ---
+            if dist_front < 0.20:
+                self.get_logger().warn(f"Panic Stop! Dist: {dist_front:.2f}m")
+                twist.linear.x = -0.15 # Mundur
+                twist.angular.z = 0.0
+            
+            # --- PRIORITAS 2: TARGET TERLIHAT (VISUAL) ---
+            # Jika target terlihat, kita 'izinkan' dekat dengan obstacle (karena obstacle itu kemungkinan adalah target)
+            elif target_visible:
+                self.get_logger().info("Target Locked! Approaching...")
                 self.state = "APPROACH"
-            else:
-                # Wander
-                if min_front < 0.6:
-                    # Obstacle! Turn
-                    twist.angular.z = 0.5
-                    twist.linear.x = 0.0
+                twist.linear.x = 0.0
+                twist.angular.z = 0.0
+
+            # --- PRIORITAS 3 (BARU): RECOVERY MUNDUR (TARGET HILANG DEKAT) ---
+            # Jika ada halangan dekat (< 0.5m) DAN baru saja lihat target (< 2s lalu).
+            # Artinya target mungkin ada di depan tapi masuk blind spot (terlalu dekat).
+            # Solusi: Mundur biar masuk frame kamera lagi.
+            elif dist_front < 0.50 and time_since_seen < 2.0:
+                 self.get_logger().info("Target lost nearby! Reversing to re-acquire...")
+                 twist.linear.x = -0.15
+                 twist.angular.z = 0.0
+                
+            # --- PRIORITAS 4: OBSTACLE AVOIDANCE (NON-CRITICAL) ---
+            # Hanya aktif jika TIDAK melihat target. 
+            # Jadi robot tidak akan kabur dari kubus yang ada di depannya (0.5m)
+            elif dist_front < 0.60:
+                self.get_logger().warn(f"Obstacle ({dist_front:.2f}m) & No Visual. Avoiding.")
+                twist.linear.x = 0.0
+                if dist_left > dist_right:
+                    twist.angular.z = 0.6 
                 else:
-                    twist.linear.x = 0.2
-                    twist.angular.z = 0.1  # Slight curve
+                    twist.angular.z = -0.6
+            
+            # --- PRIORITAS 5: MEMORY RECOVERY (CARILAH TARGET YANG HILANG) ---
+            # Jika baru saja kehilangan target (< 3 detik yang lalu), 
+            # putar badan ke arah terakhir target berada.
+            elif time_since_seen < 3.0:
+                self.get_logger().info("Scanning for lost target...")
+                twist.linear.x = 0.0
+                # last_known_error > 0 artinya target di KIRI -> putar KIRI (z positif)
+                # last_known_error < 0 artinya target di KANAN -> putar KANAN (z negatif)
+                direction = 1.0 if self.last_known_error > 0 else -1.0
+                twist.angular.z = direction * 0.6 
+
+            # --- PRIORITAS 5: WANDER (JALAN-JALAN GABUT) ---
+            else:
+                twist.linear.x = 0.2
+                twist.angular.z = 0.1 
 
         elif self.state == "APPROACH":
-            if self.angular_error is None:
-                self.state = "SEARCH"  # Lost visual
+            if not target_visible:
+                # Kehilangan visual saat approach
+                # Jangan langsung nyerah, kembali ke SEARCH biar Memory Recovery yang menangani
+                self.get_logger().warn("Visual Lost during Approach!")
+                self.state = "SEARCH"
                 twist.linear.x = 0.0
             else:
-                # Visual Servoing
-                # P-Controller for rotation
+                # Proportional Control
                 k_p = 0.005
                 twist.angular.z = k_p * self.angular_error
-
-                # Forward speed
                 twist.linear.x = 0.15
 
-                # Check if we are close enough to grab
-                # Condition: We see red (angular_error is not None) AND Lidar says close
-                if min_front < 0.40:
-                    self.get_logger().info(
-                        f"Close enough! (Lidar: {min_front:.2f}m). GRABBING."
-                    )
+                # Pickup Condition
+                if dist_front < 0.40:
+                    self.get_logger().info(f"Grabbing Range ({dist_front:.2f}m). EXECUTE.")
                     self.state = "GRAB"
                     twist.linear.x = 0.0
                     twist.angular.z = 0.0
 
         elif self.state == "GRAB":
-            # self.get_logger().info(self.latest_model_states)
-            # Targeted Grasp using Virtual Gripper logic
             target_name = self.get_closest_cube_name()
-
             if target_name:
                 self.get_logger().info(f"Grabbing {target_name}...")
                 self.delete_cube(target_name)
-
                 self.has_cube = True
                 self.state = "RETURN"
             else:
-                self.get_logger().info("Grabbing failed - nothing in range.")
-                # Back up slightly to try again
-                twist.linear.x = -0.1
+                self.get_logger().info("Grab Failed. Retry Search.")
+                twist.linear.x = -0.15
                 self.state = "SEARCH"
 
         elif self.state == "RETURN":
             rx, ry, rtheta = self.current_pose
             dist_to_home = math.sqrt(rx**2 + ry**2)
-
-            angle_to_home = math.atan2(-ry, -rx)
-            angle_diff = angle_to_home - rtheta
-
-            # Normalize angle
-            while angle_diff > math.pi:
-                angle_diff -= 2 * math.pi
-            while angle_diff < -math.pi:
-                angle_diff += 2 * math.pi
-
-            if dist_to_home < 0.3:
-                self.state = "DROP"
-                twist.linear.x = 0.0
-                twist.angular.z = 0.0
+            
+            if dist_front < 0.3:
+                 self.get_logger().warn("Obstacle on Return path!")
+                 twist.linear.x = 0.0 
+                 # Bisa tambah logic menghindar sederhana di sini kalau mau
+                 twist.angular.z = 0.5 
             else:
-                twist.angular.z = 1.5 * angle_diff
-                if abs(angle_diff) < 0.5:
-                    twist.linear.x = 0.2
+                angle_to_home = math.atan2(-ry, -rx)
+                angle_diff = angle_to_home - rtheta
+
+                while angle_diff > math.pi: angle_diff -= 2 * math.pi
+                while angle_diff < -math.pi: angle_diff += 2 * math.pi
+
+                if dist_to_home < 0.3:
+                    self.state = "DROP"
+                    twist.linear.x = 0.0
+                    twist.angular.z = 0.0
+                else:
+                    twist.angular.z = 1.5 * angle_diff
+                    if abs(angle_diff) < 0.5:
+                        twist.linear.x = 0.2
 
         elif self.state == "DROP":
             self.get_logger().info("Dropping Cube")
             self.respawn_collected_cube()
             self.cubes_collected += 1
             self.has_cube = False
-
-            # Back up a bit to avoid hitting the dropped cube immediately
             twist.linear.x = -0.2
             self.cmd_vel_pub.publish(twist)
-            time.sleep(1.0)  # Blocking sleep is okay-ish here for simple logic
-
+            time.sleep(1.0)
             self.state = "SEARCH"
 
         self.cmd_vel_pub.publish(twist)
-
 
 def main(args=None):
     rclpy.init(args=args)
@@ -417,7 +371,6 @@ def main(args=None):
     rclpy.spin(node)
     node.destroy_node()
     rclpy.shutdown()
-
 
 if __name__ == "__main__":
     main()
