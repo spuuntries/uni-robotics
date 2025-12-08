@@ -25,6 +25,8 @@ setup(
     entry_points={
         'console_scripts': [
                 'my_tracker = my_ball_tracker.ball_tracker_node:main',
+                'cube_collector = my_ball_tracker.cube_collector_node:main',
+                'cube_spawner = my_ball_tracker.cube_spawner:main',
             ],
     },
 )

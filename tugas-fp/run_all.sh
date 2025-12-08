@@ -1,12 +1,16 @@
 #!/bin/bash
 set -e
 
+# 0. Cleanup existing Gazebo processes to ensure a clean world
+echo "Cleaning up existing Gazebo processes..."
+killall -9 gzserver gzclient 2>/dev/null || true
+
 # 1. Source ROS 2 (Humble detected from environment, defaulting to typical path if not set)
 if [ -z "$ROS_DISTRO" ]; then
     export ROS_DISTRO=humble
 fi
 
-# Prevent Python from looking in ~/.local/lib/python...
+# Prevent Python from looking in ~/.local/lib/python
 export PYTHONNOUSERSITE=1
 
 if [ -f "/opt/ros/$ROS_DISTRO/setup.bash" ]; then
@@ -22,7 +26,7 @@ if [ -f "venv/bin/activate" ]; then
     echo "Activated virtual environment."
 fi
 
-# 3. Resolve dependencies (optional but good practice)
+# 3. Resolve dependencies
 # rosdep install -i --from-path src --rosdistro $ROS_DISTRO -y
 
 # 4. Build the package
@@ -58,9 +62,13 @@ for i in {1..3}; do
     sleep 5
 done || true
 
-# 7. Run the node
-echo "Running my_tracker..."
-ros2 run my_ball_tracker my_tracker
+# 7. Spawn Cubes
+echo "Spawning Cubes..."
+ros2 run my_ball_tracker cube_spawner
+
+# 8. Run the collector node
+echo "Running cube_collector..."
+ros2 run my_ball_tracker cube_collector
 
 # Cleanup background process on exit
 kill $SIM_PID
