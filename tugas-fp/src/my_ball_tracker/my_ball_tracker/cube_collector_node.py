@@ -325,12 +325,14 @@ class CubeCollectorNode(Node):
                 
             # 4. Obstacle Avoidance (Reference Style: Simple & Robust)
             # Menggunakan logika referensi: Jika ada halangan, putar satu arah (biasa kanan/kiri) sampai lolos.
-            # Hindari membandingkan kiri vs kanan yang menyebabkan osilasi (stuck).
+            # MODIFIKASI: Mundur sedikit (negative velocity) agar tidak stuck di tempat.
             elif dist_front < 0.75: 
-                # self.get_logger().warn(f"Obstacle ({dist_front:.2f}m). Rotating...")
-                twist.linear.x = 0.0
-                # FIXED: Putar konstan ke Kanan (-z) atau Kiri (+z) tanpa ragu.
-                # Sesuai referensi kamu: rotate_angle_velocity = -0.3 (Kanan)
+                # self.get_logger().warn(f"Obstacle ({dist_front:.2f}m). Backing & Rotating...")
+                
+                # REQUEST: Mundur dulu biar ada jarak bebas
+                twist.linear.x = -0.15 
+
+                # Tetap putar satu arah (Kanan) secara konsisten
                 twist.angular.z = -0.5 
             
             # 5. Memory Recovery (Scan last position)
