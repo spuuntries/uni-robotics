@@ -13,12 +13,13 @@ import cv2
 import numpy as np
 import math
 import time
+import random
 
 
 class CubeCollectorNode(Node):
     def __init__(self):
         super().__init__("cube_collector_node")
-        self.get_logger().info("Cube Collector Node Started! (Memory + Smart Search)")
+        self.get_logger().info("Cube Collector Node Started! (Spawn + Smart Search)")
 
         # --- Parameters ---
         self.declare_parameter("target_color", "red")
@@ -75,14 +76,76 @@ class CubeCollectorNode(Node):
 
         # --- Tracking & Memory Variables ---
         self.angular_error = 0.0  # None if target not seen
-        self.last_sighting_time = 0.0 # Waktu terakhir lihat target
-        self.last_known_error = 0.0   # Posisi terakhir target (untuk recovery)
+        self.last_sighting_time = 0.0 
+        self.last_known_error = 0.0   
 
         # Create a timer for the main control loop (10Hz)
         self.timer = self.create_timer(0.1, self.control_loop)
 
+        # --- RESTORED: Spawn Initial Cubes Timer ---
+        self.spawn_timer = self.create_timer(2.0, self.spawn_initial_cubes)
+
     def model_states_callback(self, msg):
         self.latest_model_states = msg
+
+    # --- RESTORED: Spawn Function ---
+    def spawn_initial_cubes(self):
+        self.spawn_timer.cancel() # Run once
+        n = 5
+        
+        # Wait for service
+        if not self.spawn_client.wait_for_service(timeout_sec=5.0):
+            self.get_logger().error("Spawn service unavailable. Skipping spawn.")
+            return
+
+        sdf = """
+        <?xml version='1.0'?>
+        <sdf version="1.4">
+            <model name="my_cube">
+                <static>0</static>
+                <link name="link">
+                    <inertial>
+                        <mass>0.1</mass>
+                        <inertia>
+                            <ixx>0.0001</ixx><ixy>0</ixy><ixz>0</ixz>
+                            <iyy>0.0001</iyy><iyz>0</iyz><izz>0.0001</izz>
+                        </inertia>
+                    </inertial>
+                    <collision name="collision">
+                        <geometry><box><size>0.2 0.2 0.2</size></box></geometry>
+                    </collision>
+                    <visual name="visual">
+                        <geometry><box><size>0.2 0.2 0.2</size></box></geometry>
+                        <material>
+                            <script>
+                                <uri>file://media/materials/scripts/gazebo.material</uri>
+                                <name>Gazebo/Red</name>
+                            </script>
+                        </material>
+                    </visual>
+                </link>
+            </model>
+        </sdf>
+        """
+
+        for i in range(n):
+            req = SpawnEntity.Request()
+            req.name = f"cube_{i}"
+            req.xml = sdf
+
+            # Spawn in a donut shape to avoid spawning on top of robot
+            while True:
+                rx = random.uniform(-1.5, 1.5)
+                ry = random.uniform(-1.5, 1.5)
+                if (rx**2 + ry**2) > 0.6**2: # Radius > 0.6m
+                    break
+
+            req.initial_pose.position.x = rx
+            req.initial_pose.position.y = ry
+            req.initial_pose.position.z = 0.5
+            self.spawn_client.call_async(req)
+
+        self.get_logger().info(f"Spawned {n} cubes.")
 
     def get_closest_cube_name(self):
         if not self.latest_model_states:
@@ -169,11 +232,7 @@ class CubeCollectorNode(Node):
                     cv2.circle(cv_image, (cx, cy), 10, (0, 255, 0), 2)
                     h, w, d = cv_image.shape
                     
-                    # Error: Positif = Target di KIRI, Negatif = Target di KANAN
                     self.angular_error = (w / 2) - cx
-                    
-                    # --- MEMORY UPDATE ---
-                    # Kita simpan info ini biar kalau hilang, kita tahu harus nyari kemana
                     self.last_known_error = self.angular_error
                     self.last_sighting_time = time.time()
             else:
@@ -241,75 +300,60 @@ class CubeCollectorNode(Node):
         dist_left = self.get_lidar_sector("left")
         dist_right = self.get_lidar_sector("right")
 
-        # Flag untuk logika
         target_visible = self.angular_error is not None
         time_since_seen = time.time() - self.last_sighting_time
 
         if self.state == "SEARCH":
-            # --- PRIORITAS 1: SAFETY KRITIS (JANGAN NABRAK) ---
+            # 1. Panic Stop
             if dist_front < 0.20:
                 self.get_logger().warn(f"Panic Stop! Dist: {dist_front:.2f}m")
-                twist.linear.x = -0.15 # Mundur
+                twist.linear.x = -0.15
                 twist.angular.z = 0.0
             
-            # --- PRIORITAS 2: TARGET TERLIHAT (VISUAL) ---
-            # Jika target terlihat, kita 'izinkan' dekat dengan obstacle (karena obstacle itu kemungkinan adalah target)
+            # 2. Target Locked (Visual)
             elif target_visible:
                 self.get_logger().info("Target Locked! Approaching...")
                 self.state = "APPROACH"
                 twist.linear.x = 0.0
                 twist.angular.z = 0.0
 
-            # --- PRIORITAS 3 (BARU): RECOVERY MUNDUR (TARGET HILANG DEKAT) ---
-            # Jika ada halangan dekat (< 0.5m) DAN baru saja lihat target (< 2s lalu).
-            # Artinya target mungkin ada di depan tapi masuk blind spot (terlalu dekat).
-            # Solusi: Mundur biar masuk frame kamera lagi.
+            # 3. Target Lost Nearby (Reverse Recovery)
             elif dist_front < 0.50 and time_since_seen < 2.0:
-                 self.get_logger().info("Target lost nearby! Reversing to re-acquire...")
+                 self.get_logger().info("Target lost nearby! Reversing...")
                  twist.linear.x = -0.15
                  twist.angular.z = 0.0
                 
-            # --- PRIORITAS 4: OBSTACLE AVOIDANCE (NON-CRITICAL) ---
-            # Hanya aktif jika TIDAK melihat target. 
-            # Jadi robot tidak akan kabur dari kubus yang ada di depannya (0.5m)
+            # 4. Obstacle Avoidance (No Visual)
             elif dist_front < 0.60:
-                self.get_logger().warn(f"Obstacle ({dist_front:.2f}m) & No Visual. Avoiding.")
+                self.get_logger().warn(f"Obstacle ({dist_front:.2f}m). Avoiding.")
                 twist.linear.x = 0.0
                 if dist_left > dist_right:
                     twist.angular.z = 0.6 
                 else:
                     twist.angular.z = -0.6
             
-            # --- PRIORITAS 5: MEMORY RECOVERY (CARILAH TARGET YANG HILANG) ---
-            # Jika baru saja kehilangan target (< 3 detik yang lalu), 
-            # putar badan ke arah terakhir target berada.
+            # 5. Memory Recovery (Scan last position)
             elif time_since_seen < 3.0:
                 self.get_logger().info("Scanning for lost target...")
                 twist.linear.x = 0.0
-                # last_known_error > 0 artinya target di KIRI -> putar KIRI (z positif)
-                # last_known_error < 0 artinya target di KANAN -> putar KANAN (z negatif)
                 direction = 1.0 if self.last_known_error > 0 else -1.0
                 twist.angular.z = direction * 0.6 
 
-            # --- PRIORITAS 5: WANDER (JALAN-JALAN GABUT) ---
+            # 6. Wander
             else:
                 twist.linear.x = 0.2
                 twist.angular.z = 0.1 
 
         elif self.state == "APPROACH":
             if not target_visible:
-                # Kehilangan visual saat approach
-                # Jangan langsung nyerah, kembali ke SEARCH biar Memory Recovery yang menangani
                 self.get_logger().warn("Visual Lost during Approach!")
                 self.state = "SEARCH"
                 twist.linear.x = 0.0
             else:
-                # Proportional Control
                 k_p = 0.005
                 twist.angular.z = k_p * self.angular_error
                 twist.linear.x = 0.15
 
-                # Pickup Condition
                 if dist_front < 0.40:
                     self.get_logger().info(f"Grabbing Range ({dist_front:.2f}m). EXECUTE.")
                     self.state = "GRAB"
@@ -335,7 +379,6 @@ class CubeCollectorNode(Node):
             if dist_front < 0.3:
                  self.get_logger().warn("Obstacle on Return path!")
                  twist.linear.x = 0.0 
-                 # Bisa tambah logic menghindar sederhana di sini kalau mau
                  twist.angular.z = 0.5 
             else:
                 angle_to_home = math.atan2(-ry, -rx)
