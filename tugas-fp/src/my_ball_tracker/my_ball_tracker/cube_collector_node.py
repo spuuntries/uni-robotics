@@ -20,10 +20,6 @@ class CubeCollectorNode(Node):
         super().__init__("cube_collector_node")
         self.get_logger().info("Cube Collector Node Started! (Lidar + Vision Only)")
 
-        # --- Parameters ---
-        self.declare_parameter("target_color", "red")
-        self.declare_parameter("pickup_distance", 0.45)  # Distance to trigger grab
-
         # --- Subscribers ---
         self.image_sub = self.create_subscription(
             Image, "/camera/image_raw", self.image_callback, 10
