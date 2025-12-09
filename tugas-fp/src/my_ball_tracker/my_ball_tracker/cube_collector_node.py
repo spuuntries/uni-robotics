@@ -194,6 +194,38 @@ class CubeCollectorNode(Node):
     def scan_callback(self, msg):
         self.scan_ranges = msg.ranges
 
+        # Lidar Debug Visualization
+        if self.debug_lidar_pub.get_subscription_count() > 0:
+            # Create a black image (500x500)
+            img_size = 500
+            debug_img = np.zeros((img_size, img_size, 3), dtype=np.uint8)
+
+            cx, cy = img_size // 2, img_size // 2
+            scale = 50.0  # 1 meter = 50 pixels
+
+            # Draw robot center (Red Dot)
+            cv2.circle(debug_img, (cx, cy), 5, (0, 0, 255), -1)
+
+            angle = msg.angle_min
+            for r in msg.ranges:
+                if not math.isinf(r) and not math.isnan(r):
+                    # ROS Coordinate System: X is Forward, Y is Left
+                    x_ros = r * math.cos(angle)
+                    y_ros = r * math.sin(angle)
+
+                    # Map to Image Coordinates:
+                    # Robot Forward (X) -> Image Up (-Y)
+                    # Robot Left (Y)    -> Image Left (-X)
+                    img_x = int(cx - y_ros * scale)
+                    img_y = int(cy - x_ros * scale)
+
+                    if 0 <= img_x < img_size and 0 <= img_y < img_size:
+                        debug_img[img_y, img_x] = (255, 255, 255)  # White dots
+
+                angle += msg.angle_increment
+
+            self.debug_lidar_pub.publish(self.bridge.cv2_to_imgmsg(debug_img, "bgr8"))
+
     def odom_callback(self, msg):
         # Extract x, y, theta
         pos = msg.pose.pose.position
