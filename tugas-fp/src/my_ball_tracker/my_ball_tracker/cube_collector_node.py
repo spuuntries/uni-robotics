@@ -92,7 +92,7 @@ class CubeCollectorNode(Node):
     def spawn_initial_cubes(self):
         # Cancel the timer so this only runs once
         self.spawn_timer.cancel()
-        n = 5
+        n = 10
 
         import random
 
@@ -133,7 +133,7 @@ class CubeCollectorNode(Node):
         </sdf>
         """
 
-        for i in range(5):
+        for i in range(n):
             req = SpawnEntity.Request()
             name = f"cube_{i}"
             req.name = name
