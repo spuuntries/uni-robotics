@@ -14,7 +14,7 @@ Team 2
 
 ## Video
 
-<iframe width="560" height="315" src="https://www.youtube.com/embed/nKXy-cYZ3Fg?si=dEud7QFDyTyDNqw-" title="YouTube video player" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" referrerpolicy="strict-origin-when-cross-origin" allowfullscreen></iframe>
+[![Youtube Video](https://github.com/user-attachments/assets/b927caf2-029f-4f41-aa56-64b7284dd5f6)](https://youtu.be/nKXy-cYZ3Fg)
 
 ## Diagrams
 
