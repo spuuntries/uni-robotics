@@ -92,7 +92,7 @@ class CubeCollectorNode(Node):
     def spawn_initial_cubes(self):
         # Cancel the timer so this only runs once
         self.spawn_timer.cancel()
-        n = 10
+        n = 5
 
         import random
 
